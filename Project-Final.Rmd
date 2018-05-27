@@ -1,0 +1,144 @@
+---
+title: "Practical Machine Learning Project - Predicting Exercise Classes"
+author: "Hari Ravichandran"
+date: "5/27/2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Executive Summary
+In this project, I predict the 'classe' variable in the data using two different methods: Stochastic Gradient Boosting ('gbm') and Random Forest ('ranger'). First, I cleaned the data by eliminating all of the columns with more than 50% NA values. I also made sure that only the relevant data for the model building was included, and in the correct format. The data for both models ran with over 99% accuracy on the training and testing sets. I used a 60-40 training-testing data split for the model building. In addition, I optimized the model parameters to give better performance using the trControl and tuneGrid parameters in the train() function from the 'caret' library. The models were chosen from the [list of available models](http://topepo.github.io/caret/train-models-by-tag.html). The criterion for choosing the models was as follows: the model should be computationally efficient, it should be able to handle multiple levels of the 'classe' variable, and it should be able to give very accurate predictions (>95% accuracy). Overall, I believe that these models did extremely well in predicting 'classe' based on the given parameters.
+
+# Initialize
+```{r init, results = 'hide'}
+library(data.table)
+
+training <- fread("pml-training.csv", na.strings=c(""," ","NA"))
+validation <- fread("pml-testing.csv", na.strings=c(""," ","NA"))
+
+training <- data.frame(training)
+```
+
+# Cleaning the Data
+```{r datacleaning, results = 'hide'}
+#Remove all columns in the training set with more than 50% NA values
+training_c <- training[, -which(colMeans(is.na(training)) > 0.5)]
+
+#'classe', 'new_window' are factors
+training_c$classe <- factor(training_c$classe, levels = c("A", "B", "C", "D", "E"))
+training_c$new_window <- factor(training_c$new_window)
+
+#Remove columns that have no bearing on the predictions
+training_c <- training_c[, !(colnames(training_c) %in% c("cvtd_timestamp", "user_name", "V1"))]
+
+#Validation Set with same columns as the training/test sets
+validation <- data.frame(validation)
+
+validation$new_window <- factor(validation$new_window)
+
+d_validation <- validation[, (colnames(validation) %in% colnames(training_c))]
+d_validation_PID <- validation$problem_id #problem ID in separate set, order the same as d_validation
+```
+
+# Split into Training and Testing Sets
+```{r traintest, results = 'hide', message = FALSE, warning = FALSE}
+library(caret)
+
+in_train <- createDataPartition(training_c$classe, p = 0.6, list = FALSE)
+d_training <- training_c[in_train,]
+d_testing <- training_c[-in_train,]
+```
+
+# Model #1 - 'gbm' Stochastic Gradient Boosting
+For my first model, I chose to use Stochastic Gradient Boosting. This model is an extension of boosting that has a stochastic, or random component to boost its performance.
+
+For further reading about this method, see [this paper.](https://statweb.stanford.edu/~jhf/ftp/stobst.pdf)
+
+## Model #1 -'gbm' Performance Optimized Implementation
+```{r gbm}
+library(gbm)
+library(plyr)
+
+gbm_control <- trainControl(method = "boot", number = 3, allowParallel = TRUE) #Do Boosting Only Three Times
+gbm_grid <- expand.grid(n.trees = 40, interaction.depth = 6, shrinkage = 0.1, n.minobsinnode = 10) #Only 40 iterations as opposed to 150 iterations (default)
+
+f_gbm <- train(classe ~ ., data = d_training, method = "gbm", trControl = gbm_control, tuneLength = 10, tuneGrid = gbm_grid)
+```
+
+## Model #1 - 'gbm' Training Accuracy
+```{r gbm_train}
+p_gbm_train <- predict(f_gbm, d_training)
+c_gbm_train <- confusionMatrix(p_gbm_train, d_training$classe) #Confusion Matrix
+print(c_gbm_train$overall[1]) #Accuracy = $overall[1]
+print(c_gbm_train$table)
+```
+
+## Model #1 - 'gbm' Testing Accuracy (Cross-Validation)
+```{r gbm_test}
+p_gbm <- predict(f_gbm, d_testing)
+c_gbm <- confusionMatrix(p_gbm, d_testing$classe) #Confusion Matrix
+print(c_gbm$overall[1]) #Accuracy = $overall[1]
+print(c_gbm$table)
+```
+
+The testing accuracy does not decrease significantly between the training and testing sets, indicating that the model is applicable to data outside of the testing set.
+
+## Model #1 - 'gbm' Validation Results
+```{r gbm_validation}
+p_gbm_valid <- predict(f_gbm, d_validation)
+print(p_gbm_valid)
+```
+
+## Model #1 - 'gbm' Out of Sample Error
+The out-of-sample error is estimated here to be (1 - Accuracy) * 100%. Based on this formula, the out of sample error is (1 - 0.98815) * 100% = 1.185%.
+
+# Model #2 - 'ranger' Random Forest
+The second model I tried was 'ranger', which is a random forest implementation. This method is considered to be considerably faster than the 'randomForest' and 'party' method, and is well-suited for high-dimensional data. 
+
+For more information, see [this paper.](https://arxiv.org/pdf/1508.04409.pdf)
+
+## Model #2 -'ranger' Performance Optimized Implementation
+```{r ranger, message = FALSE, warning = FALSE}
+library(e1071)
+library(ranger)
+library(dplyr)
+
+rf_control <- trainControl(method = "boot", number = 3) #Do Resampling Only Three Times
+rf_grid <- expand.grid(mtry = c(1:3), splitrule = "extratrees", min.node.size = 1) #Only 'mtry' variables for random forest, keep other variables default
+
+set.seed(474)
+f_rf <- train(classe ~ ., data = d_training, method = "ranger", trControl = rf_control, tuneGrid = rf_grid)
+```
+
+## Model #2 -'ranger' Training Accuracy
+```{r ranger_train}
+p_rf_train <- predict(f_rf, d_training)
+c_rf_train <- confusionMatrix(p_rf_train, d_training$classe) #Confusion Matrix
+print(c_rf_train$overall[1]) #Accuracy = $overall[1]
+print(c_rf_train$table)
+```
+
+## Model #2 -'ranger' Testing Accuracy (Cross-Validation)
+```{r ranger_test}
+p_rf <- predict(f_rf, d_testing)
+c_rf <- confusionMatrix(p_rf, d_testing$classe) #Confusion Matrix
+print(c_rf$overall[1]) #Accuracy = $overall[1]
+print(c_rf$table)
+```
+
+The testing accuracy does not decrease significantly between the training and testing sets, indicating that the model is applicable to data outside of the testing set.
+
+## Model #2 -'ranger' Validation Results
+```{r ranger_validation}
+p_rf_valid <- predict(f_rf, d_validation)
+print(p_rf_valid)
+```
+
+## Model #2 - 'ranger' Out of Sample Error
+The out-of-sample error is estimated here to be (1 - Accuracy) * 100%. Based on this formula, the out of sample error is (1 - 0.99426) * 100% = 0.574%.
+
+# Conclusion
+Overall, I was satisfied with my results for this project. The results for the machine learning algorithms showed strong accuracies on both the training and test sets. Both models also scored perfectly on the validation set. I really enjoyed doing this project and learned a lot about machine learning.
